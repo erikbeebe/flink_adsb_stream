@@ -1,7 +1,10 @@
 # flink_adsb_stream
 Read ADS-B stream from Kafka, parse, window, and make available via Queryable State
 
-This is still a work in progress, but..
+This is still a work in progress, but..  This takes a stream of ADS-B JSON events from Kafka, extracts timestamps,
+enriches the stream (currently by queryable a Redis instance containing the FAA database), continues adding
+new information to the record as it becomes available, and then emits records every 5 seconds with a current
+picture of the airspace.
 
 It expects a Kafka topic with data that looks like this:
 
