@@ -83,34 +83,34 @@ public class Planes {
 
     public static final String STATE_NAME = "faa";
 
-	public static void main(String[] args) throws Exception {
-		/* get properties file, eg. /tmp/planes.properties
+    public static void main(String[] args) throws Exception {
+        /* get properties file, eg. /tmp/planes.properties
             topic: defaultsink
             bootstrap.servers: XXXXXXXX-kafka0.va.eventador.io:9092
             auto.offset.reset: earliest
         */
-		ParameterTool params = ParameterTool.fromPropertiesFile(args[0]);
+        ParameterTool params = ParameterTool.fromPropertiesFile(args[0]);
 
-		// create streaming environment
-		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        // create streaming environment
+        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-		// enable event time processing
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+        // enable event time processing
+        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         env.getConfig().setAutoWatermarkInterval(1000L);
 
-		// enable fault-tolerance, 60s checkpointing
-		env.enableCheckpointing(60000);
+        // enable fault-tolerance, 60s checkpointing
+        env.enableCheckpointing(60000);
 
-		// enable restarts
-		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(50, 500L));
-		env.setStateBackend(new RocksDBStateBackend("file:///tmp/rocks_state_store"));
+        // enable restarts
+        env.setRestartStrategy(RestartStrategies.fixedDelayRestart(50, 500L));
+        env.setStateBackend(new RocksDBStateBackend("file:///tmp/rocks_state_store"));
 
-		Properties kParams = params.getProperties();
-		kParams.setProperty("group.id", UUID.randomUUID().toString());
-		//kParams.setProperty("group.id", "FLINK_KAFKA_GROUP");
-		DataStream<ObjectNode> inputStream = env.addSource(new FlinkKafkaConsumer010<>(params.getRequired("topic"), new JSONDeserializationSchema(), kParams)).name("Kafka 0.10 Source");
+        Properties kParams = params.getProperties();
+        kParams.setProperty("group.id", UUID.randomUUID().toString());
+        //kParams.setProperty("group.id", "FLINK_KAFKA_GROUP");
+        DataStream<ObjectNode> inputStream = env.addSource(new FlinkKafkaConsumer010<>(params.getRequired("topic"), new JSONDeserializationSchema(), kParams)).name("Kafka 0.10 Source");
 
-		DataStream<PlaneModel> planes = inputStream
+        DataStream<PlaneModel> planes = inputStream
                                           .assignTimestampsAndWatermarks(new PlaneTimestampExtractor())
                                           .keyBy(jsonNode -> jsonNode.get("icao").textValue())
                                           .map(new PlaneMapper())
@@ -125,9 +125,9 @@ public class Planes {
         // Print plane stream to stdout
         keyedPlanes.print();
 
-		DataStream<Tuple2<Integer,PlaneModel>> military_planes = keyedPlanes.filter(new MilitaryPlaneFilter())
+        DataStream<Tuple2<Integer,PlaneModel>> military_planes = keyedPlanes.filter(new MilitaryPlaneFilter())
                                               .name("Military Plane Filter");
-		military_planes.print();
+        military_planes.print();
 
         // At this point, build a stream that stores all the active (seen in the last
         // 60 seconds) ICAOs in our current airspace, and store in a single well known
@@ -135,29 +135,29 @@ public class Planes {
         // the managed state, but if you use the print sink you'll get the array of 
         // ICAOs as a string for debugging.
         DataStream<String> airspace = keyedPlanes.windowAll(SlidingEventTimeWindows.of(Time.seconds(60), Time.seconds(5)))
-												 .apply(new AirspaceWindow())
-												 .keyBy(0) // this will always be the 'AIRPLANE' key
-												 .map(new AirspaceMapper()); // mapper to store state
+                                                 .apply(new AirspaceWindow())
+                                                 .keyBy(0) // this will always be the 'AIRPLANE' key
+                                                 .map(new AirspaceMapper()); // mapper to store state
 
-		airspace.print();
+        airspace.print();
 
         String app_name = String.format("Streaming Planes <- Kafka Topic: %s", params.getRequired("topic"));
-		env.execute(app_name);
+        env.execute(app_name);
 
-	}
+    }
 
-	public static class PlaneTimestampExtractor extends BoundedOutOfOrdernessTimestampExtractor<ObjectNode> {
+    public static class PlaneTimestampExtractor extends BoundedOutOfOrdernessTimestampExtractor<ObjectNode> {
 
-		public PlaneTimestampExtractor() {
-			super(Time.seconds(MAX_FLIGHT_DELAY));
-		}
+        public PlaneTimestampExtractor() {
+            super(Time.seconds(MAX_FLIGHT_DELAY));
+        }
 
-		@Override
-		public long extractTimestamp(ObjectNode json) {
-			long ts = json.get("timestamp").asLong() * 1000;
-		    return ts;
-		}
-	}
+        @Override
+        public long extractTimestamp(ObjectNode json) {
+            long ts = json.get("timestamp").asLong() * 1000;
+            return ts;
+        }
+    }
 
     private static JedisPoolConfig buildPoolConfig() {
         final JedisPoolConfig poolConfig = new JedisPoolConfig();
@@ -188,12 +188,12 @@ public class Planes {
 
             //System.out.println("Mapping: " + planejson.get("icao").textValue());
 
-			// access the state value
-			try {
-				currentState = state.value();
-			} catch (IOException e) {
-				System.out.println("oh no ioexception");
-			}
+            // access the state value
+            try {
+                currentState = state.value();
+            } catch (IOException e) {
+                System.out.println("oh no ioexception");
+            }
 
             if (currentState != null) {
                 // Load whats in state cache
@@ -213,14 +213,14 @@ public class Planes {
             }
 
             // get new values from JSON, these should always be in the payload
-			plane.msg_type = planejson.get("msg_type").asInt();
-			plane.timestamp_verbose = planejson.get("timestamp_verbose").textValue();
-			plane.timestamp = planejson.get("timestamp").asLong();
-			plane.icao = planejson.get("icao").textValue();
-			plane.counter = planejson.get("counter").asLong();
+            plane.msg_type = planejson.get("msg_type").asInt();
+            plane.timestamp_verbose = planejson.get("timestamp_verbose").textValue();
+            plane.timestamp = planejson.get("timestamp").asLong();
+            plane.icao = planejson.get("icao").textValue();
+            plane.counter = planejson.get("counter").asLong();
 
             switch (plane.msg_type) {
-			    case 1: plane.flight = planejson.get("flight").textValue();
+                case 1: plane.flight = planejson.get("flight").textValue();
                         break;
                 case 3: plane.altitude = planejson.get("altitude").asInt();
                         plane.lat = planejson.get("lat").asDouble();
@@ -256,16 +256,16 @@ public class Planes {
             return plane;
         }
 
-		@Override
-		public void open(Configuration config) {
-			ValueStateDescriptor<PlaneModel> descriptor =
-					new ValueStateDescriptor<>(
-							STATE_NAME, // the state store name
-							TypeInformation.of(new TypeHint<PlaneModel>() {}), // type information
+        @Override
+        public void open(Configuration config) {
+            ValueStateDescriptor<PlaneModel> descriptor =
+                    new ValueStateDescriptor<>(
+                            STATE_NAME, // the state store name
+                            TypeInformation.of(new TypeHint<PlaneModel>() {}), // type information
                             new PlaneModel());
             descriptor.setQueryable(STATE_NAME); // Use this name when querying state
-			state = getRuntimeContext().getState(descriptor);
-		}
+            state = getRuntimeContext().getState(descriptor);
+        }
 
     }
 
@@ -277,12 +277,12 @@ public class Planes {
         public String map(Tuple2<String, HashSet<String>> icaoTuple) {
             HashSet<String> currentState = new HashSet<>();
 
-			// access the state value
-			try {
-				currentState = state.value();
-			} catch (IOException e) {
-				System.out.println("oh no ioexception");
-			}
+            // access the state value
+            try {
+                currentState = state.value();
+            } catch (IOException e) {
+                System.out.println("oh no ioexception");
+            }
 
             // Update state record
             try {
@@ -291,19 +291,19 @@ public class Planes {
                 System.out.printf("Unable to update airspace state");
             }
 
-			return icaoTuple.f1.toString();
+            return icaoTuple.f1.toString();
         }
 
-		@Override
-		public void open(Configuration config) {
-			ValueStateDescriptor<HashSet<String>> descriptor =
-					new ValueStateDescriptor<>(
-							"airspace", // the state store name
-							TypeInformation.of(new TypeHint<HashSet<String>>() {}), // type information
+        @Override
+        public void open(Configuration config) {
+            ValueStateDescriptor<HashSet<String>> descriptor =
+                    new ValueStateDescriptor<>(
+                            "airspace", // the state store name
+                            TypeInformation.of(new TypeHint<HashSet<String>>() {}), // type information
                             new HashSet<String>());
             descriptor.setQueryable("airspace"); // Use this name when querying state
-			state = getRuntimeContext().getState(descriptor);
-		}
+            state = getRuntimeContext().getState(descriptor);
+        }
 
     }
 
@@ -314,31 +314,31 @@ public class Planes {
         }
     }
 
-	private static class MilitaryPlaneFilter implements FilterFunction<Tuple2<Integer,PlaneModel>> {
+    private static class MilitaryPlaneFilter implements FilterFunction<Tuple2<Integer,PlaneModel>> {
 
-		@Override
-		public boolean filter(Tuple2<Integer,PlaneModel> planeTuple) throws Exception {
-			return planeTuple.f1.isMilitary();
-		}
-	}
+        @Override
+        public boolean filter(Tuple2<Integer,PlaneModel> planeTuple) throws Exception {
+            return planeTuple.f1.isMilitary();
+        }
+    }
 
     public static class AirspaceWindow implements AllWindowFunction<Tuple2<Integer,PlaneModel>, Tuple2<String, HashSet<String>>, TimeWindow> {
-		@Override
-		public void apply (TimeWindow window, Iterable<Tuple2<Integer, PlaneModel>> values, Collector<Tuple2<String, HashSet<String>>> out) throws Exception {
-			String KEY = "AIRPLANES"; // Key that we'll query state with
-			HashSet<String> icaoList = new HashSet<String>(); // Set of unique ICAOs in airspace currently
+        @Override
+        public void apply (TimeWindow window, Iterable<Tuple2<Integer, PlaneModel>> values, Collector<Tuple2<String, HashSet<String>>> out) throws Exception {
+            String KEY = "AIRPLANES"; // Key that we'll query state with
+            HashSet<String> icaoList = new HashSet<String>(); // Set of unique ICAOs in airspace currently
 
-			for (Tuple2<Integer, PlaneModel> plane: values) {
-				icaoList.add(plane.f1.icao);
-			}
-			out.collect (new Tuple2<String, HashSet<String>>(KEY, icaoList));
-		}
-	};
+            for (Tuple2<Integer, PlaneModel> plane: values) {
+                icaoList.add(plane.f1.icao);
+            }
+            out.collect (new Tuple2<String, HashSet<String>>(KEY, icaoList));
+        }
+    };
 
     // Window functions
     public static class PlaneWindow implements WindowFunction<PlaneModel, Tuple2<Integer, PlaneModel>, Tuple, TimeWindow> {
-		@Override
-		public void apply(Tuple key, TimeWindow window, Iterable<PlaneModel> airplanes, Collector<Tuple2<Integer, PlaneModel>> collector) throws Exception {
+        @Override
+        public void apply(Tuple key, TimeWindow window, Iterable<PlaneModel> airplanes, Collector<Tuple2<Integer, PlaneModel>> collector) throws Exception {
             Integer count = 0;
             PlaneModel last_message = new PlaneModel();
             for (PlaneModel in: airplanes) {
@@ -346,8 +346,8 @@ public class Planes {
                 // System.out.println("Updating count for " + in.icao + ", now at " + count);
                 last_message = in;
             }
-			collector.collect(new Tuple2<Integer, PlaneModel>(count, last_message));
-		}
-	}
+            collector.collect(new Tuple2<Integer, PlaneModel>(count, last_message));
+        }
+    }
 
 }
