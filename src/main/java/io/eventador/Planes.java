@@ -37,6 +37,7 @@ import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExt
 import org.apache.flink.streaming.api.functions.windowing.AllWindowFunction;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
@@ -58,7 +59,7 @@ import java.lang.String;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -115,18 +116,30 @@ public class Planes {
                                           .map(new PlaneMapper())
                                           .name("Timestamp -> KeyBy ICAO -> Map");
 
-        DataStream<Tuple2<Integer,PlaneModel>> keyedplanes = planes
+        DataStream<Tuple2<Integer,PlaneModel>> keyedPlanes = planes
                                                    .keyBy("icao")
                                                    .window(TumblingEventTimeWindows.of(Time.seconds(5)))
                                                    .apply(new PlaneWindow())
                                                    .name("Tumbling Window");
 
         // Print plane stream to stdout
-        keyedplanes.print();
+        keyedPlanes.print();
 
-		DataStream<Tuple2<Integer,PlaneModel>> military_planes = keyedplanes.filter(new MilitaryPlaneFilter())
+		DataStream<Tuple2<Integer,PlaneModel>> military_planes = keyedPlanes.filter(new MilitaryPlaneFilter())
                                               .name("Military Plane Filter");
 		military_planes.print();
+
+        // At this point, build a stream that stores all the active (seen in the last
+        // 60 seconds) ICAOs in our current airspace, and store in a single well known
+        // queryable key.  Emit every 5 seconds.  This stream is only here to populate 
+        // the managed state, but if you use the print sink you'll get the array of 
+        // ICAOs as a string for debugging.
+        DataStream<String> airspace = keyedPlanes.windowAll(SlidingEventTimeWindows.of(Time.seconds(60), Time.seconds(5)))
+												 .apply(new AirspaceWindow())
+												 .keyBy(0) // this will always be the 'AIRPLANE' key
+												 .map(new AirspaceMapper()); // mapper to store state
+
+		airspace.print();
 
         String app_name = String.format("Streaming Planes <- Kafka Topic: %s", params.getRequired("topic"));
 		env.execute(app_name);
@@ -161,6 +174,8 @@ public class Planes {
         return poolConfig;
     }
 
+
+
     private static class PlaneMapper extends RichMapFunction<ObjectNode, PlaneModel> {
 
         private transient ValueState<PlaneModel> state;
@@ -170,6 +185,8 @@ public class Planes {
             PlaneModel plane = new PlaneModel();
 
             PlaneModel currentState = new PlaneModel();
+
+            //System.out.println("Mapping: " + planejson.get("icao").textValue());
 
 			// access the state value
 			try {
@@ -252,6 +269,44 @@ public class Planes {
 
     }
 
+    // Map planes currently overhead into a queryable key
+    private static class AirspaceMapper extends RichMapFunction<Tuple2<String, HashSet<String>>, String> {
+        private transient ValueState<HashSet<String>> state;
+
+        @Override
+        public String map(Tuple2<String, HashSet<String>> icaoTuple) {
+            HashSet<String> currentState = new HashSet<>();
+
+			// access the state value
+			try {
+				currentState = state.value();
+			} catch (IOException e) {
+				System.out.println("oh no ioexception");
+			}
+
+            // Update state record
+            try {
+                state.update(icaoTuple.f1);
+            } catch (IOException e) {
+                System.out.printf("Unable to update airspace state");
+            }
+
+			return icaoTuple.f1.toString();
+        }
+
+		@Override
+		public void open(Configuration config) {
+			ValueStateDescriptor<HashSet<String>> descriptor =
+					new ValueStateDescriptor<>(
+							"airspace", // the state store name
+							TypeInformation.of(new TypeHint<HashSet<String>>() {}), // type information
+                            new HashSet<String>());
+            descriptor.setQueryable("airspace"); // Use this name when querying state
+			state = getRuntimeContext().getState(descriptor);
+		}
+
+    }
+
     private static class ErikSerSchema implements SerializationSchema<Tuple3<Long, String, Long>> {
         @Override
         public byte[] serialize(Tuple3<Long, String, Long> tuple3) {
@@ -266,6 +321,19 @@ public class Planes {
 			return planeTuple.f1.isMilitary();
 		}
 	}
+
+    public static class AirspaceWindow implements AllWindowFunction<Tuple2<Integer,PlaneModel>, Tuple2<String, HashSet<String>>, TimeWindow> {
+		@Override
+		public void apply (TimeWindow window, Iterable<Tuple2<Integer, PlaneModel>> values, Collector<Tuple2<String, HashSet<String>>> out) throws Exception {
+			String KEY = "AIRPLANES"; // Key that we'll query state with
+			HashSet<String> icaoList = new HashSet<String>(); // Set of unique ICAOs in airspace currently
+
+			for (Tuple2<Integer, PlaneModel> plane: values) {
+				icaoList.add(plane.f1.icao);
+			}
+			out.collect (new Tuple2<String, HashSet<String>>(KEY, icaoList));
+		}
+	};
 
     // Window functions
     public static class PlaneWindow implements WindowFunction<PlaneModel, Tuple2<Integer, PlaneModel>, Tuple, TimeWindow> {
